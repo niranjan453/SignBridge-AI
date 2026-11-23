@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
@@ -63,6 +63,11 @@ class TextInput(BaseModel):
     language: Language | None = None
 
 
+class TranslationError(BaseModel):
+    code: str
+    message: str
+
+
 class TranslationOut(BaseModel):
     id: UUID
     mode: Mode
@@ -73,6 +78,13 @@ class TranslationOut(BaseModel):
     audio_base64: str | None = None
     audio_content_type: str | None = None
     sign_tokens: list[str] | None = None
+    input_type: Literal["text", "audio", "video", "frame"]
+    recognized_text: str | None = None
+    confidence: Annotated[float, Field(ge=0, le=1)] | None = None
+    processing_time_ms: Annotated[float, Field(ge=0)]
+    model_name: str
+    timestamp: datetime
+    error: TranslationError | None = None
 
 
 class HistoryOut(BaseModel):

@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     media_max_bytes: int = Field(10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
     processing_timeout_seconds: float = Field(10, gt=0, le=120)
     ai_model_version: str = "mock-1"
+    ai_model_name: str = "signbridge-mock"
+    ai_context_timeout_seconds: float = Field(2, gt=0, le=120)
+    ws_idle_seconds: float = Field(30, gt=0, le=300)
+    ws_frames_per_second: int = Field(5, ge=1, le=30)
+    ws_max_sessions: int = Field(16, ge=1, le=128)
     login_attempts_per_minute: int = Field(10, ge=1)
     translations_per_minute: int = Field(30, ge=1)
 

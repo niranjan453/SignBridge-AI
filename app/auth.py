@@ -10,6 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.requests import HTTPConnection
 
 from app.db import get_db
 from app.models import User, UserSettings
@@ -22,7 +23,7 @@ dummy_hash = hasher.hash("dummy hash for unknown accounts")
 DB = Annotated[Session, Depends(get_db)]
 
 
-def signing_key(request: Request) -> str:
+def signing_key(request: HTTPConnection) -> str:
     secret = request.app.state.settings.jwt_secret
     if secret is None:
         raise HTTPException(503, "Account authentication is not configured")
@@ -48,9 +49,13 @@ def optional_user(
         if "authorization" in request.headers:
             raise credentials_error()
         return None
+    return user_from_token(request, db, token.credentials)
+
+
+def user_from_token(request: HTTPConnection, db: Session, token: str) -> User:
     try:
         claims = jwt.decode(
-            token.credentials, signing_key(request), algorithms=["HS256"],
+            token, signing_key(request), algorithms=["HS256"],
             issuer="signbridge", options={"require": ["sub", "iat", "exp", "ver"]},
         )
         user_id = UUID(claims["sub"])

@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from starlette.exceptions import HTTPException
 from starlette.requests import ClientDisconnect
 
-from app import auth, translations
+from app import auth, realtime, translations
 from app.adapters import TranslationService, mock_service
 from app.body_limits import SmallBodyLimit
 from app.config import Settings, get_settings
@@ -36,10 +36,14 @@ def create_app(settings: Settings | None = None, service: TranslationService | N
     app = FastAPI(title="SignBridge AI", version="1.0.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.sessions = sessionmaker(engine, expire_on_commit=False)
-    app.state.translation_service = service or mock_service(settings.ai_model_version)
+    app.state.translation_service = service or mock_service(
+        settings.ai_model_version, settings.ai_model_name, settings.ai_context_timeout_seconds,
+    )
+    app.state.sign_sessions = set()
     app.state.limiter = RateLimiter()
     app.include_router(auth.router, prefix="/api/v1", tags=["accounts"])
     app.include_router(translations.router, prefix="/api/v1")
+    app.include_router(realtime.router, prefix="/api/v1")
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):

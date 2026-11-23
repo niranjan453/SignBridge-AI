@@ -1,17 +1,16 @@
-import asyncio
 from pathlib import Path
 from typing import Annotated
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
-from app.adapters import ProcessingError
 from app.auth import DB, CurrentUser, OptionalUser
 from app.media import AUDIO_FORMATS, VIDEO_FORMATS, temporary_media
 from app.models import Feedback, Translation, User
+from app.pipeline import run_translation
 from app.schemas import FeedbackIn, HistoryOut, Language, Mode, TextInput, TranslationOut
 
 router = APIRouter(tags=["translations"])
@@ -52,30 +51,16 @@ async def process(
     language: str | None, text: str | None = None, media: Path | None = None,
 ) -> TranslationOut:
     user_id, preferred_language = context
-    service = request.app.state.translation_service
-    result = TranslationOut(
-        id=uuid4(), mode=mode, status="completed",
-        model_version=service.model_version, is_mock=service.is_mock,
+    result, error = await run_translation(
+        request.app.state.translation_service, mode, language or preferred_language,
+        request.app.state.settings.processing_timeout_seconds, text, media,
     )
-    error = None
-    try:
-        async with asyncio.timeout(request.app.state.settings.processing_timeout_seconds):
-            output = await service.translate(mode, language or preferred_language, text, media)
-            result.output_text = output.output_text
-            result.audio_base64 = output.audio_base64
-            result.audio_content_type = output.audio_content_type
-            result.sign_tokens = output.sign_tokens
-    except TimeoutError:
-        result.status = "timed_out"
-        error = (504, "Translation processing timed out")
-    except ProcessingError:
-        result.status = "failed"
-        error = (502, "Translation processing failed")
     if user_id is not None:
         await run_in_threadpool(save_result, db, user_id, result, text)
     if error:
-        status, message = error
-        raise HTTPException(status, {"message": message, "translation": result.model_dump(mode="json")})
+        raise HTTPException(error.http_status, {
+            "message": error.message, "translation": result.model_dump(mode="json"),
+        })
     return result
 
 
