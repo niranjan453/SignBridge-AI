@@ -1,0 +1,84 @@
+x-postgres: &postgres
+  image: postgres:17
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+    interval: 2s
+    timeout: 3s
+    retries: 15
+    start_period: 5s
+
+x-backend-image: &backend-image
+  image: ${COMPOSE_PROJECT_NAME}-backend:local
+  build: .
+
+services:
+  db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-signbridge_db}
+      POSTGRES_USER: ${POSTGRES_USER:-signbridge_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    <<: *backend-image
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-signbridge_user}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-signbridge_db}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:5173","http://localhost:3000"]}'
+      ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-30}
+      MEDIA_MAX_BYTES: ${MEDIA_MAX_BYTES:-10485760}
+      PROCESSING_TIMEOUT_SECONDS: ${PROCESSING_TIMEOUT_SECONDS:-10}
+      LOGIN_ATTEMPTS_PER_MINUTE: ${LOGIN_ATTEMPTS_PER_MINUTE:-10}
+      TRANSLATIONS_PER_MINUTE: ${TRANSLATIONS_PER_MINUTE:-30}
+      AI_MODEL_NAME: ${AI_MODEL_NAME:-signbridge-mock}
+      AI_MODEL_VERSION: ${AI_MODEL_VERSION:-mock-1}
+      AI_CONTEXT_TIMEOUT_SECONDS: ${AI_CONTEXT_TIMEOUT_SECONDS:-2}
+      WS_IDLE_SECONDS: ${WS_IDLE_SECONDS:-30}
+      WS_FRAMES_PER_SECOND: ${WS_FRAMES_PER_SECOND:-5}
+      WS_MAX_SESSIONS: ${WS_MAX_SESSIONS:-16}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  test-db:
+    <<: *postgres
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: signbridge_test
+      POSTGRES_USER: ${POSTGRES_USER:-signbridge_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks: ["test"]
+
+  tests:
+    <<: *backend-image
+    profiles: ["test"]
+    command: ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+    environment:
+      APP_ENV: test
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-signbridge_user}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@test-db:5432/signbridge_test
+    depends_on:
+      test-db:
+        condition: service_healthy
+    networks: ["test"]
+
+networks:
+  test:
+    internal: true
+
+volumes:
+  postgres_data:

@@ -1,0 +1,22 @@
+# Allow only the files used to build the backend image.
+**
+!Dockerfile
+!requirements.txt
+!alembic.ini
+!app/
+!app/**
+!migrations/
+!migrations/**
+!tests/
+!tests/**
+
+**/.env
+**/.env.*
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.venv/
+**/venv/
+**/.test-local/
+**/media/
+**/uploads/

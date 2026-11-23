@@ -27,7 +27,10 @@ def create_app(settings: Settings | None = None, service: TranslationService | N
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        log.info("signbridge_start model_version=%s", app.state.translation_service.model_version)
+        log.info(
+            "signbridge_start environment=%s model_version=%s",
+            settings.app_env, app.state.translation_service.model_version,
+        )
         try:
             yield
         finally:
