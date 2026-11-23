@@ -158,6 +158,59 @@ Use JPEG or PNG frames of up to 64 KiB, increasing integer sequences, and nondec
 
 HTTP and WebSocket translations provide input type, recognized text, optional confidence, processing time in milliseconds, model name and version, mock flag, UTC timestamp, and optional error details. The mock sign recognizer emits a fixed demonstration confidence. History continues to use its existing record format.
 
+## OpenCV & Computer Vision Pipeline
+
+The backend and Docker image install `opencv-python-headless`, NumPy, and Pillow. OpenCV handles decoding and processing. Pillow checks the encoded image header and dimensions before OpenCV allocates the decoded pixels. Camera capture happens in the browser; the server accepts the existing WebSocket image messages.
+
+- **Images** — JPEG and PNG are decoded to 8-bit BGR, checked against the size and dimension limits, optionally rotated clockwise, then resized without cropping, stretching, or upscaling. The model sees either RGB or BGR in HWC layout. By default pixels are read-only RGB `float32` in `[0, 1]`; disabling normalization leaves `uint8` pixels in `[0, 255]`.
+- **Videos** — The existing sign translation routes accept MP4 or WebM. OpenCV uses FFmpeg to read one frame at a time. The pipeline estimates duration and timestamps from source FPS, retains only the configured samples, and applies the same preprocessing as for camera frames. Video capture closes before the request's temporary file is cleaned up. Codec availability depends on the installed OpenCV wheel.
+- **WebSocket** — The existing guest and authenticated protocol uses the same preprocessing and retains a bounded window of recent successful frame decodes per connection. Sequence and timestamp checks still apply. The server drops frames whose estimated delay relative to the session's clock grows beyond the lag limit. Clients should use actual capture timestamps and wait for each response or skip frames locally when the server is busy.
+- **Results and errors** — The optional `translation.vision` object reports output dimensions, sample count, preprocessing and landmark timings in milliseconds, latest hand count, and landmark status. Video results also report FPS, decoded frame count, and estimated duration. Corrupt media or media that exceeds dimension limits produces `invalid_input`, and a processing deadline produces `processing_timeout`. HTTP preserves its existing error envelope, and WebSocket processing errors appear under the `result.translation.error` object. Protocol errors such as malformed base64 or stale frames use WebSocket `type: "error"`.
+
+### Optional MediaPipe hand landmarks
+
+The default backend uses a no-landmarks adapter. Configure a local Hand Landmarker `.task` asset to enable MediaPipe. One CPU detector is reused for the process. It returns zero, one, or two hands. Each detected hand contains 21 image-normalized `x` and `y` points, relative `z`, and handedness and score when provided by MediaPipe. Points outside the frame retain their normalized coordinates. Raw frames and landmark coordinates are kept in the processing input and are not included in translation history or public responses. A successful detector run with no hands returns an empty list. Missing or failing MediaPipe reports `unavailable` and leaves the mock translation operational. [Google Hand Landmarker guide](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/python)
+
+For Docker, put the model at `.test-local/hand_landmarker.task` (an ignored path), then build the optional image and run it in the foreground. In PowerShell replace `$(pwd)` with `${PWD}` in the mount argument.
+
+```sh
+docker compose stop backend
+docker compose build --build-arg INSTALL_MEDIAPIPE=true backend
+docker compose run --rm --service-ports -v "$(pwd)/.test-local/hand_landmarker.task:/models/hand_landmarker.task:ro" -e MEDIAPIPE_MODEL_PATH=/models/hand_landmarker.task -e MPLCONFIGDIR=/tmp/matplotlib backend
+```
+
+For native Python, install the optional dependencies and set `MEDIAPIPE_MODEL_PATH` to the absolute path of the asset. Platform support depends on the available MediaPipe wheel. MediaPipe 0.10.35 declares GUI OpenCV; the `--no-deps` install keeps the existing headless OpenCV package as the only provider of `cv2`. Linux native installations also need the EGL and GLES runtime libraries installed by the optional Docker build.
+
+```sh
+python -m pip install "absl-py~=2.3" "flatbuffers~=25.9" "matplotlib>=3.10,<4" "sounddevice~=0.5"
+python -m pip install --no-deps mediapipe==0.10.35
+```
+
+### Configuration and model integration
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `CV_MAX_SIDE`, `CV_MAX_PIXELS` | `224`, `2073600` | Longest output edge and maximum source pixels. Source axes must be 16–4096 pixels. |
+| `CV_ROTATION`, `CV_COLOR`, `CV_NORMALIZE` | `0`, `rgb`, `true` | Clockwise rotation (0/90/180/270), model channel order, and optional pixel scaling. |
+| `CV_VIDEO_MAX_FRAMES`, `CV_VIDEO_MAX_SECONDS` | `240`, `15` | Maximum decoded video frames and duration. |
+| `CV_VIDEO_SAMPLE_FPS`, `CV_VIDEO_MAX_SAMPLES` | `4`, `12` | Target sampling rate and retained video samples. |
+| `CV_WS_WINDOW`, `CV_WS_MAX_LAG_MS` | `6`, `2000` | Recent samples retained per WebSocket and maximum estimated lag above the session baseline. |
+| `MEDIA_MAX_BYTES`, `PROCESSING_TIMEOUT_SECONDS` | `10485760`, `10` | Upload cap and translation deadline. WebSocket camera images retain the 64 KiB limit. |
+| `MEDIAPIPE_MODEL_PATH`, `INSTALL_MEDIAPIPE` | unset, `false` | Local Hand Landmarker asset and optional Docker build flag. |
+| `MEDIAPIPE_DETECTION_CONFIDENCE`, `MEDIAPIPE_PRESENCE_CONFIDENCE` | `0.5`, `0.5` | Detector and landmark presence thresholds. |
+
+The app runs at most two native preprocessing jobs at a time and rejects configurations that exceed the retained-frame memory budget. For slower laptops, lower the output dimensions, video sample count, or WebSocket window.
+
+Implement `SignRecognizer.recognize_sign(SignInput, language)` in `app/adapters.py` and inject the adapter into the translation service. Use `SignInput.latest` for static signs, or the ordered `SignInput.frames` for dynamic signs. Each `PreparedFrame` carries pixels, landmarks, dimensions, sequence, timestamp and normalization settings. Apply the trained model's own temporal window, crop or padding, tensor layout, and class vocabulary in the recognizer. The distributed backend still uses the mock ISL recognizer.
+
+```sh
+docker compose build backend
+docker compose run --rm tests
+docker compose --profile test stop test-db
+```
+
+The suite generates real JPEG, PNG, MP4, and WebM fixtures and uses controlled MediaPipe outputs for zero, one, and two hands. Default tests do not require a landmark asset or trained ISL model.
+
 ## Tests and integration
 
 Run `.venv/Scripts/python -m pytest -q` for the suite with SQLite. Set `TEST_DATABASE_URL` to a PostgreSQL database whose test login can create schemas, then run the same command for PostgreSQL coverage. The suite creates and drops a unique schema per test.

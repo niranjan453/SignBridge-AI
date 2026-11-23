@@ -16,12 +16,12 @@ from app.config import Settings
 from app.main import create_app
 from app.models import Feedback, Translation, User, UserSettings
 from conftest import SECRET
+from vision_fixtures import write_video
 
 API = "/api/v1"
 EMAIL = "demo@example.com"
 PASSWORD = "valid password for testing"
 WAV = b"RIFF\x00\x00\x00\x00WAVEfmt "
-MP4 = b"\x00\x00\x00\x18ftypmp42"
 
 
 def register(client, email=EMAIL):
@@ -120,13 +120,15 @@ def test_invalid_and_expired_tokens(client):
 
 
 @pytest.mark.parametrize("mode,media,mime,output", [
-    ("sign-to-text", MP4, "video/mp4", "output_text"),
-    ("sign-to-speech", MP4, "video/mp4", "audio_base64"),
+    ("sign-to-text", None, "video/mp4", "output_text"),
+    ("sign-to-speech", None, "video/mp4", "audio_base64"),
     ("speech-to-text", WAV, "audio/wav", "output_text"),
     ("text-to-speech", None, None, "audio_base64"),
     ("text-to-sign", None, None, "sign_tokens"),
 ])
-def test_guest_modes(client, mode, media, mime, output):
+def test_guest_modes(client, tmp_path, mode, media, mime, output):
+    if mime == "video/mp4":
+        media = write_video(tmp_path / "guest.mp4").read_bytes()
     args = {"content": media, "headers": {"Content-Type": mime}} if media else {"json": {"text": "Hello India"}}
     response = client.post(f"{API}/translations/{mode}", **args)
     assert response.status_code == 200
@@ -185,8 +187,8 @@ def test_validation_processing_failure_and_upload_limits(client):
     assert client.post(path, headers={"Content-Type": "text/plain"}, content=WAV).status_code == 415
     assert client.post(path, headers={"Content-Type": "audio/wav"}, content=b"bad").status_code == 415
     assert client.post(path, headers={"Content-Type": "audio/wav"}, content=b"").status_code == 422
-    assert client.post(path, headers={"Content-Type": "audio/wav"}, content=WAV * 100).status_code == 413
-    assert client.post(path, headers={"Content-Type": "audio/wav"}, content=iter([WAV, b"a" * 1024])).status_code == 413
+    assert client.post(path, headers={"Content-Type": "audio/wav"}, content=WAV * 1000).status_code == 413
+    assert client.post(path, headers={"Content-Type": "audio/wav"}, content=iter([WAV, b"a" * 4096])).status_code == 413
 
 
 def test_timeout_and_media_cleanup(create_client):

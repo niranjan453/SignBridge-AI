@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -8,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.requests import ClientDisconnect
 
@@ -16,7 +18,9 @@ from app.adapters import TranslationService, mock_service
 from app.body_limits import SmallBodyLimit
 from app.config import Settings, get_settings
 from app.errors import error_response
+from app.landmarks import load_landmarks
 from app.limits import RateLimiter
+from app.vision import ModelInput, VisionProcessor
 
 log = logging.getLogger("uvicorn.error")
 
@@ -25,8 +29,25 @@ def create_app(settings: Settings | None = None, service: TranslationService | N
     settings = settings or get_settings()
     engine = create_engine(settings.database_url, pool_pre_ping=True, hide_parameters=True)
 
+    vision = VisionProcessor(
+        model_input=ModelInput(settings.cv_max_side, settings.cv_color, settings.cv_normalize,
+                               int(settings.cv_rotation)),
+        max_pixels=settings.cv_max_pixels, max_video_frames=settings.cv_video_max_frames,
+        max_video_seconds=settings.cv_video_max_seconds, max_video_samples=settings.cv_video_max_samples,
+        sample_fps=settings.cv_video_sample_fps, max_video_bytes=settings.media_max_bytes,
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        landmarks = None
+        if service is None and settings.mediapipe_model_path is not None:
+            landmarks = await run_in_threadpool(
+                load_landmarks, settings.mediapipe_model_path,
+                settings.mediapipe_detection_confidence, settings.mediapipe_presence_confidence,
+            )
+            app.state.translation_service = replace(
+                app.state.translation_service, vision=replace(vision, landmarks=landmarks),
+            )
         log.info(
             "signbridge_start environment=%s model_version=%s",
             settings.app_env, app.state.translation_service.model_version,
@@ -34,13 +55,17 @@ def create_app(settings: Settings | None = None, service: TranslationService | N
         try:
             yield
         finally:
-            engine.dispose()
+            try:
+                if landmarks is not None:
+                    await run_in_threadpool(landmarks.close)
+            finally:
+                engine.dispose()
 
     app = FastAPI(title="SignBridge AI", version="1.0.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.sessions = sessionmaker(engine, expire_on_commit=False)
     app.state.translation_service = service or mock_service(
-        settings.ai_model_version, settings.ai_model_name, settings.ai_context_timeout_seconds,
+        settings.ai_model_version, settings.ai_model_name, settings.ai_context_timeout_seconds, vision,
     )
     app.state.sign_sessions = set()
     app.state.limiter = RateLimiter()

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+from collections import deque
 from time import monotonic
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -10,13 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from app.adapters import CameraFrame
 from app.auth import user_from_token
 from app.pipeline import run_translation
 from app.schemas import Language, Mode
+from app.vision import MAX_FRAME_BYTES, CameraFrame, PreparedFrame
 
 router = APIRouter()
-MAX_FRAME_BYTES = 64 * 1024
 MAX_MESSAGE_CHARS = 4 * ((MAX_FRAME_BYTES + 2) // 3) + 512
 
 
@@ -90,6 +90,8 @@ def session_language(socket: WebSocket, token: str) -> str:
 
 async def process_frames(socket: WebSocket, session_id: UUID, language: str) -> None:
     settings = socket.app.state.settings
+    window: deque[PreparedFrame] = deque(maxlen=settings.cv_ws_window)
+    clock_offset_ms = float("inf")
     last_sequence = -1
     last_timestamp = -1
     next_frame = 0.0
@@ -125,9 +127,13 @@ async def process_frames(socket: WebSocket, session_id: UUID, language: str) -> 
             continue
 
         last_sequence, last_timestamp = frame.sequence, frame.timestamp_ms
+        clock_offset_ms = min(clock_offset_ms, now * 1000 - frame.timestamp_ms)
+        if now * 1000 - frame.timestamp_ms - clock_offset_ms > settings.cv_ws_max_lag_ms:
+            await send_error(socket, ProtocolError("stale_frame", "Frame arrived too late to process"))
+            continue
         result, _ = await run_translation(
             socket.app.state.translation_service, Mode.SIGN_TO_TEXT, language,
-            settings.processing_timeout_seconds, media=camera_frame,
+            settings.processing_timeout_seconds, media=camera_frame, window=window,
         )
         await socket.send_json({
             "type": "result", "session_id": str(session_id), "sequence": frame.sequence,

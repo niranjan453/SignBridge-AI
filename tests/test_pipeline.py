@@ -8,6 +8,7 @@ from app.adapters import CameraFrame, MockAdapters, ServiceUnavailable, mock_ser
 from app.ai_contracts import LLMRequest, Recognition, RetrievalRequest
 from app.pipeline import run_translation
 from app.schemas import Mode
+from vision_fixtures import encoded_image
 
 
 def test_mock_llm_and_retrieval_contracts():
@@ -54,7 +55,7 @@ def test_context_unavailable_or_slow(stage, slow):
 
     service = replace(mock_service("mock-1"), context_timeout_seconds=0.005, **{stage: Unavailable()})
     output, error = asyncio.run(run_translation(
-        service, Mode.SIGN_TO_TEXT, "en-IN", 1, media=CameraFrame(b"test", "image/jpeg", 0, 1),
+        service, Mode.SIGN_TO_TEXT, "en-IN", 1, media=CameraFrame(encoded_image(), "image/jpeg", 0, 1),
     ))
     assert error is None
     assert output.output_text == output.recognized_text

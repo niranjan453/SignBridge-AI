@@ -68,6 +68,19 @@ class TranslationError(BaseModel):
     message: str
 
 
+class VisionMetadata(BaseModel):
+    width: int
+    height: int
+    sample_count: int
+    preprocessing_ms: float
+    landmark_ms: float
+    landmark_status: Literal["disabled", "unavailable", "ok"]
+    hands_detected: int
+    fps: float | None = None
+    frame_count: int | None = None
+    duration_seconds: float | None = None
+
+
 class TranslationOut(BaseModel):
     id: UUID
     mode: Mode
@@ -85,6 +98,7 @@ class TranslationOut(BaseModel):
     model_name: str
     timestamp: datetime
     error: TranslationError | None = None
+    vision: VisionMetadata | None = None
 
 
 class HistoryOut(BaseModel):

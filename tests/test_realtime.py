@@ -6,12 +6,14 @@ from uuid import uuid4
 import pytest
 from fastapi import WebSocketDisconnect
 
-from app.adapters import CameraFrame, ServiceUnavailable
+from app.adapters import ServiceUnavailable
+from app.vision import SignInput
 from app.realtime import MAX_FRAME_BYTES
 from test_backend import API, account
+from vision_fixtures import encoded_image
 
 PATH = f"{API}/ws/sign-recognition"
-JPEG = b"\xff\xd8\xffframe\xff\xd9"
+JPEG = encoded_image()
 
 
 def start(socket, **kwargs):
@@ -136,7 +138,7 @@ def test_session_capacity_and_origin(create_client):
 def test_processing_failure_hides_details(client):
     class UnavailableSign:
         async def recognize_sign(self, media, language):
-            assert isinstance(media, CameraFrame) and media.data == JPEG
+            assert isinstance(media, SignInput) and media.latest.pixels.shape == (40, 64, 3)
             raise ServiceUnavailable("private provider details")
 
     service = client.app.state.translation_service
@@ -147,3 +149,27 @@ def test_processing_failure_hides_details(client):
         assert result["status"] == "failed"
         assert result["error"]["code"] == "service_unavailable"
         assert "private" not in str(result)
+
+
+def test_dynamic_window_and_corrupted_image(create_client):
+    client, _ = create_client(cv_ws_window=2, ws_frames_per_second=30)
+    service = client.app.state.translation_service
+    windows = []
+
+    class InspectFrames:
+        async def recognize_sign(self, media, language):
+            windows.append(tuple(sample.sequence for sample in media.frames))
+            return await service.sign.recognize_sign(media, language)
+
+    with client, client.websocket_connect(PATH) as socket:
+        client.app.state.translation_service = replace(service, sign=InspectFrames())
+        session = start(socket)
+        socket.send_json(frame(session, data=b"\xff\xd8\xffcorrupt\xff\xd9"))
+        assert socket.receive_json()["translation"]["error"]["code"] == "invalid_input"
+        for index in range(1, 4):
+            time.sleep(0.04)
+            socket.send_json(frame(session, index))
+            translation = socket.receive_json()["translation"]
+            assert translation["status"] == "completed"
+            assert translation["vision"]["sample_count"] == min(index, 2)
+        assert windows == [(1,), (1, 2), (2, 3)]

@@ -46,7 +46,7 @@ def create_client(monkeypatch, database_url):
     def factory(**overrides):
         config = Config("alembic.ini")
         command.upgrade(config, "head")
-        settings = Settings(database_url=database_url, jwt_secret=SECRET, media_max_bytes=1024, **overrides)
+        settings = Settings(database_url=database_url, jwt_secret=SECRET, media_max_bytes=4096, **overrides)
         app = create_app(settings)
         engine = app.state.sessions.kw["bind"]
         if engine.dialect.name == "sqlite":
